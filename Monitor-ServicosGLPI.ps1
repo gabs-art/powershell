@@ -64,7 +64,7 @@ $GLPI_PASSWORD = "Corolla!@#05042019"
 # Informe o ID da entidade do cliente no GLPI.
 # Consulte a tabela de entidades no final deste script.
 # Exemplo: TrustIT > PM - Capitolio = ID 5
-$GLPI_ENTITY_ID = 23  # TrustIT > CONSORCIO - CISUM
+$GLPI_ENTITY_ID = 11  # TrustIT > CONSORCIO - CISUM
 
 # Lista padrao de servicos (usada quando -Servicos nao e informado)
 $SERVICOS_PADRAO = @(
