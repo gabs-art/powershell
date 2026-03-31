@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Monitora servicos Windows e abre chamados automaticos no GLPI via API REST.
@@ -58,6 +58,14 @@ $GLPI_APP_TOKEN = "DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y"
 $GLPI_USER     = "script.integration"
 $GLPI_PASSWORD = "Corolla!@#05042019"
 
+# ============================================================
+#  IDENTIFICACAO DO CLIENTE - ALTERE AQUI A CADA INSTALACAO
+# ============================================================
+# Informe o ID da entidade do cliente no GLPI.
+# Consulte a tabela de entidades no final deste script.
+# Exemplo: TrustIT > PM - Capitolio = ID 5
+$GLPI_ENTITY_ID = 23  # TrustIT > CONSORCIO - CISUM
+
 # Lista padrao de servicos (usada quando -Servicos nao e informado)
 $SERVICOS_PADRAO = @(
     "Backup Service Controller",  # Agente de backup
@@ -80,7 +88,10 @@ $AGUARDAR_REINICIO_SEG = 15
 # 1=Muito baixa  2=Baixa  3=Media  4=Alta  5=Muito alta
 $GLPI_URGENCY  = 4
 $GLPI_PRIORITY = 4
-$GLPI_TYPE     = 1   # 1=Incidente  2=Requisicao
+$GLPI_TYPE         = 1    # 1=Incidente  2=Requisicao
+$GLPI_CATEGORY_ID  = 131  # Servicos do Windows
+$GLPI_REQUESTER_ID = 1491 # script.integration
+$GLPI_ASSIGN_ID    = 1491 # Atribuido ao solucionar
 
 # Pastas de trabalho
 $WORK_DIR  = "C:\TRUSTIT"
@@ -169,7 +180,31 @@ function Obter-SessionToken {
     }
 }
 
+ 
 
+function Set-EntidadeAtiva {
+    param([string]$SessionToken)
+    # Troca a entidade ativa da sessao para garantir que o chamado
+    # seja aberto na entidade correta (GLPI ignora entities_id no payload
+    # se a sessao estiver na entidade raiz)
+    $json = "{""entities_id"":$GLPI_ENTITY_ID,""is_recursive"":false}"
+    [System.IO.File]::WriteAllText($TEMP_JSON, $json, [System.Text.Encoding]::ASCII)
+    try {
+        $raw = & curl.exe -s -k -X POST "$GLPI_URL/changeActiveEntities" `
+            -H "Content-Type: application/json" `
+            -H "Accept: application/json" `
+            -H "App-Token: $GLPI_APP_TOKEN" `
+            -H "Session-Token: $SessionToken" `
+            -d "@$TEMP_JSON"
+        Write-Log "Entidade ativa alterada para ID $GLPI_ENTITY_ID." "INFO"
+    }
+    catch {
+        Write-Log "Aviso: nao foi possivel alterar entidade ativa: $_" "WARN"
+    }
+    finally {
+        if (Test-Path $TEMP_JSON) { Remove-Item $TEMP_JSON -Force -ErrorAction SilentlyContinue }
+    }
+}
 function Get-GLPIUserId {
     param([string]$BasicAuth, [string]$SessionToken)
     try {
@@ -192,6 +227,55 @@ function Get-GLPIUserId {
         return 0
     }
 }
+function Solucionar-Chamado {
+    param(
+        [string]$TicketId,
+        [string]$SessionToken
+    )
+    # Registra solucao via ITILSolution e atualiza status + atribuido
+    $dataHora = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
+    $descClean = "Servico reiniciado automaticamente pelo monitoramento TRUSTIT em $dataHora. Chamado solucionado automaticamente."
+
+    # Passo 1: ITILSolution
+    $json = "{""input"":{""items_id"":$TicketId,""itemtype"":""Ticket"",""content"":""$descClean""}}"
+    [System.IO.File]::WriteAllText($TEMP_JSON, $json, [System.Text.Encoding]::ASCII)
+    try {
+        $raw = & curl.exe -s -k -X POST "$GLPI_URL/ITILSolution" `
+            -H "Content-Type: application/json" `
+            -H "Accept: application/json" `
+            -H "App-Token: $GLPI_APP_TOKEN" `
+            -H "Session-Token: $SessionToken" `
+            -d "@$TEMP_JSON"
+        $data = $raw | ConvertFrom-Json
+        if ($data.id) {
+            Write-Log "ITILSolution registrada no chamado #${TicketId}. ID solucao: $($data.id)" "INFO"
+        } else {
+            Write-Log "Aviso: ITILSolution nao retornou ID. Resposta: $raw" "WARN"
+        }
+    }
+    catch { Write-Log "Excecao ao registrar ITILSolution: $_" "WARN" }
+    finally { if (Test-Path $TEMP_JSON) { Remove-Item $TEMP_JSON -Force -ErrorAction SilentlyContinue } }
+
+    # Passo 2: Atualiza status para Solucionado (5) e define Atribuido
+    $json2 = "{""input"":{""id"":$TicketId,""status"":5,""_users_id_assign"":$GLPI_ASSIGN_ID}}"
+    [System.IO.File]::WriteAllText($TEMP_JSON, $json2, [System.Text.Encoding]::ASCII)
+    try {
+        $raw2 = & curl.exe -s -k -X PUT "$GLPI_URL/Ticket/$TicketId" `
+            -H "Content-Type: application/json" `
+            -H "Accept: application/json" `
+            -H "App-Token: $GLPI_APP_TOKEN" `
+            -H "Session-Token: $SessionToken" `
+            -d "@$TEMP_JSON"
+        Write-Log "Chamado #${TicketId} marcado como Solucionado. Atribuido ao ID $GLPI_ASSIGN_ID." "INFO"
+        return $true
+    }
+    catch {
+        Write-Log "Excecao ao atualizar status do chamado #${TicketId}: $_" "WARN"
+        return $false
+    }
+    finally { if (Test-Path $TEMP_JSON) { Remove-Item $TEMP_JSON -Force -ErrorAction SilentlyContinue } }
+}
+
 function Encerrar-Sessao([string]$SessionToken) {
     & curl.exe -s -k -X GET "$GLPI_URL/killSession" `
         -H "App-Token: $GLPI_APP_TOKEN" `
@@ -306,7 +390,7 @@ function Abrir-ChamadoGLPI {
     # Monta JSON e salva em arquivo temporario SEM BOM
     # CRITICO: Out-File e Set-Content adicionam BOM e causam ERROR_JSON_PAYLOAD_INVALID
     $json = "{""input"":{""name"":""$tituloClean"",""content"":""$conteudoClean""," +
-            """urgency"":$urgencia,""impact"":$urgencia,""priority"":$urgencia,""type"":$GLPI_TYPE,""_users_id_requester"":$glpiUserId}}"
+            """urgency"":$urgencia,""impact"":$urgencia,""priority"":$urgencia,""type"":$GLPI_TYPE,""entities_id"":$GLPI_ENTITY_ID,""itilcategories_id"":$GLPI_CATEGORY_ID,""_users_id_requester"":$GLPI_REQUESTER_ID}}"
 
     [System.IO.File]::WriteAllText($TEMP_JSON, $json, [System.Text.Encoding]::ASCII)
 
@@ -385,6 +469,7 @@ foreach ($servico in $SERVICOS_MONITORADOS) {
         Write-Log "Sessao GLPI iniciada com sucesso."
         $glpiUserId = Get-GLPIUserId -BasicAuth $basicAuth -SessionToken $sessionToken
         Write-Log "ID do usuario requerente ($GLPI_USER): $glpiUserId"
+        Set-EntidadeAtiva -SessionToken $sessionToken
     }
 
     # Tenta reiniciar
@@ -407,16 +492,25 @@ foreach ($servico in $SERVICOS_MONITORADOS) {
         }
     }
 
-    # Servico foi recuperado - abre chamado informativo (sem dedup, pois e um evento unico)
+    # Servico foi recuperado pelo script
     if ($reiniciouOk) {
-        Write-Log "[$servico] Abrindo chamado de recuperacao no GLPI..." "INFO"
-        Abrir-ChamadoGLPI -Servico $servico -SessionToken $sessionToken -Tipo "RECUPERADO" | Out-Null
+        if (Chamado-JaAberto $servico) {
+            # Havia chamado aberto - soluciona ele
+            $ticketExistente = (Get-Content (Get-DedupFile $servico) -ErrorAction SilentlyContinue | Out-String).Trim()
+            Write-Log "[$servico] Solucionando chamado #$ticketExistente no GLPI..." "INFO"
+            Solucionar-Chamado -TicketId $ticketExistente -SessionToken $sessionToken | Out-Null
+            Limpar-ChamadoAberto $servico
+        } else {
+            # Nao havia chamado aberto - abre um informativo de recuperacao
+            Write-Log "[$servico] Abrindo chamado informativo de recuperacao no GLPI..." "INFO"
+            Abrir-ChamadoGLPI -Servico $servico -SessionToken $sessionToken -Tipo "RECUPERADO" | Out-Null
+        }
         continue
     }
 
     # Servico continua parado - verifica anti-duplicidade
     if (Chamado-JaAberto $servico) {
-        $ticketExistente = Get-Content (Get-DedupFile $servico) -ErrorAction SilentlyContinue
+        $ticketExistente = (Get-Content (Get-DedupFile $servico) -ErrorAction SilentlyContinue | Out-String).Trim()
         Write-Log "[$servico] Chamado #$ticketExistente ja aberto anteriormente. Nao abrira duplicata." "WARN"
         continue
     }
@@ -435,3 +529,42 @@ if ($sessaoIniciada -and $sessionToken) {
 }
 
 Write-Log "=== Fim da execucao ==="
+
+# ============================================================
+#  TABELA DE ENTIDADES - REFERENCIA PARA INSTALACAO
+# ============================================================
+# Consulte o GLPI em: Administracao > Entidades para obter os IDs atualizados.
+# Preencha $GLPI_ENTITY_ID acima com o ID correspondente ao cliente.
+#
+# ENTIDADES CADASTRADAS (atualizado em 30/03/2026):
+#
+#  ID  | ENTIDADE
+# -----|------------------------------------------
+#  0   | TrustIT (raiz - nao usar para clientes)
+#  10  | TrustIT > PM - Pompeu
+#  11  | TrustIT > PM - Tocantins
+#  12  | TrustIT > PM - Guarapari
+#  13  | TrustIT > PM - Barroso
+#  15  | TrustIT > PM - Lagoa Dourada
+#  16  | TrustIT > CONSORCIO - CIESP
+#  19  | TrustIT > PM - Sao Joao Nepomuceno
+#  20  | TrustIT > PM - Alegre
+#  23  | TrustIT > CONSORCIO - CISUM
+#  24  | TrustIT > PM - Lambari
+#  25  | TrustIT > PM - Cajuri
+#  26  | TrustIT > PM - Sao Sebastiao da Bela Vista
+#  28  | TrustIT > PM - Borda da Mata
+#  29  | TrustIT > PM - Leopoldina
+#
+# Para descobrir os IDs rode no PowerShell do servidor:
+#
+#  $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("script.integration:Corolla!@#05042019"))
+#  $session = (& curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/initSession" `
+#      -H "Authorization: Basic $basicAuth" `
+#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
+#      -H "Content-Type: application/json" | ConvertFrom-Json).session_token
+#  & curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/Entity?range=0-50" `
+#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
+#      -H "Session-Token: $session" `
+#      -H "Content-Type: application/json" | ConvertFrom-Json | Select-Object id, completename | Format-Table -AutoSize
+# ============================================================
