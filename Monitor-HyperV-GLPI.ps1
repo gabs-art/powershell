@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Monitora VMs do Hyper-V e abre chamados automaticos no GLPI quando
@@ -52,11 +52,21 @@ $GLPI_APP_TOKEN = "DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y"
 $GLPI_USER      = "script.integration"
 $GLPI_PASSWORD  = "Corolla!@#05042019"
 
+# ============================================================
+#  IDENTIFICACAO DO CLIENTE - ALTERE AQUI A CADA INSTALACAO
+# ============================================================
+# Informe o ID da entidade do cliente no GLPI.
+# Consulte a tabela de entidades no final deste script.
+# Exemplo: TrustIT > PM - Capitolio = ID 5
+$GLPI_ENTITY_ID = 0   # <-- ALTERE PARA O ID DA ENTIDADE DO CLIENTE
+
 # Prioridade do chamado
 # 1=Muito baixa  2=Baixa  3=Media  4=Alta  5=Muito alta
 $GLPI_URGENCY  = 4
 $GLPI_PRIORITY = 4
-$GLPI_TYPE     = 1   # 1=Incidente  2=Requisicao
+$GLPI_TYPE         = 1    # 1=Incidente  2=Requisicao
+$GLPI_CATEGORY_ID  = 56   # Categoria Hyper-V
+$GLPI_REQUESTER_ID = 1491 # script.integration
 
 
 # Pastas de trabalho
@@ -147,7 +157,31 @@ function Obter-SessionToken {
     }
 }
 
+ 
 
+function Set-EntidadeAtiva {
+    param([string]$SessionToken)
+    # Troca a entidade ativa da sessao para garantir que o chamado
+    # seja aberto na entidade correta (GLPI ignora entities_id no payload
+    # se a sessao estiver na entidade raiz)
+    $json = "{""entities_id"":$GLPI_ENTITY_ID,""is_recursive"":false}"
+    [System.IO.File]::WriteAllText($TEMP_JSON, $json, [System.Text.Encoding]::ASCII)
+    try {
+        $raw = & curl.exe -s -k -X POST "$GLPI_URL/changeActiveEntities" `
+            -H "Content-Type: application/json" `
+            -H "Accept: application/json" `
+            -H "App-Token: $GLPI_APP_TOKEN" `
+            -H "Session-Token: $SessionToken" `
+            -d "@$TEMP_JSON"
+        Write-Log "Entidade ativa alterada para ID $GLPI_ENTITY_ID." "INFO"
+    }
+    catch {
+        Write-Log "Aviso: nao foi possivel alterar entidade ativa: $_" "WARN"
+    }
+    finally {
+        if (Test-Path $TEMP_JSON) { Remove-Item $TEMP_JSON -Force -ErrorAction SilentlyContinue }
+    }
+}
 function Get-GLPIUserId {
     param([string]$BasicAuth, [string]$SessionToken)
     try {
@@ -232,7 +266,7 @@ function Abrir-ChamadoGLPI {
     $conteudoClean = $conteudo -replace '"', "'" -replace "`r`n", " " -replace "`n", " " -replace "`r", ""
 
     $json = "{""input"":{""name"":""$tituloClean"",""content"":""$conteudoClean""," +
-            """urgency"":$GLPI_URGENCY,""impact"":$GLPI_URGENCY,""priority"":$GLPI_PRIORITY,""type"":$GLPI_TYPE,""_users_id_requester"":$glpiUserId}}"
+            """urgency"":$GLPI_URGENCY,""impact"":$GLPI_URGENCY,""priority"":$GLPI_PRIORITY,""type"":$GLPI_TYPE,""entities_id"":$GLPI_ENTITY_ID,""itilcategories_id"":$GLPI_CATEGORY_ID,""_users_id_requester"":$GLPI_REQUESTER_ID}}"
 
     [System.IO.File]::WriteAllText($TEMP_JSON, $json, [System.Text.Encoding]::ASCII)
 
@@ -339,6 +373,7 @@ foreach ($vm in $listaVMs) {
         Write-Log "Sessao GLPI iniciada."
         $glpiUserId = Get-GLPIUserId -BasicAuth $basicAuth -SessionToken $sessionToken
         Write-Log "ID do usuario requerente ($GLPI_USER): $glpiUserId"
+        Set-EntidadeAtiva -SessionToken $sessionToken
     }
 
     $detalhes = "VM detectada no estado '$estado'. Nenhuma acao automatica foi executada — intervencao manual necessaria."
@@ -355,3 +390,42 @@ if ($sessaoIniciada -and $sessionToken) {
 }
 
 Write-Log "=== Fim da execucao ==="
+
+# ============================================================
+#  TABELA DE ENTIDADES - REFERENCIA PARA INSTALACAO
+# ============================================================
+# Consulte o GLPI em: Administracao > Entidades para obter os IDs atualizados.
+# Preencha $GLPI_ENTITY_ID acima com o ID correspondente ao cliente.
+#
+# ENTIDADES CADASTRADAS (atualizado em 30/03/2026):
+#
+#  ID  | ENTIDADE
+# -----|------------------------------------------
+#  0   | TrustIT (raiz - nao usar para clientes)
+#  10  | TrustIT > PM - Pompeu
+#  11  | TrustIT > PM - Tocantins
+#  12  | TrustIT > PM - Guarapari
+#  13  | TrustIT > PM - Barroso
+#  15  | TrustIT > PM - Lagoa Dourada
+#  16  | TrustIT > CONSORCIO - CIESP
+#  19  | TrustIT > PM - Sao Joao Nepomuceno
+#  20  | TrustIT > PM - Alegre
+#  23  | TrustIT > CONSORCIO - CISUM
+#  24  | TrustIT > PM - Lambari
+#  25  | TrustIT > PM - Cajuri
+#  26  | TrustIT > PM - Sao Sebastiao da Bela Vista
+#  28  | TrustIT > PM - Borda da Mata
+#  29  | TrustIT > PM - Leopoldina
+#
+# Para descobrir os IDs rode no PowerShell do servidor:
+#
+#  $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("script.integration:Corolla!@#05042019"))
+#  $session = (& curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/initSession" `
+#      -H "Authorization: Basic $basicAuth" `
+#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
+#      -H "Content-Type: application/json" | ConvertFrom-Json).session_token
+#  & curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/Entity?range=0-50" `
+#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
+#      -H "Session-Token: $session" `
+#      -H "Content-Type: application/json" | ConvertFrom-Json | Select-Object id, completename | Format-Table -AutoSize
+# ============================================================
