@@ -58,7 +58,7 @@ $GLPI_PASSWORD  = "Corolla!@#05042019"
 # Informe o ID da entidade do cliente no GLPI.
 # Consulte a tabela de entidades no final deste script.
 # Exemplo: TrustIT > PM - Capitolio = ID 5
-$GLPI_ENTITY_ID = 0   # <-- ALTERE PARA O ID DA ENTIDADE DO CLIENTE
+$GLPI_ENTITY_ID = 11   # <-- ALTERE PARA O ID DA ENTIDADE DO CLIENTE
 
 # Prioridade do chamado
 # 1=Muito baixa  2=Baixa  3=Media  4=Alta  5=Muito alta
