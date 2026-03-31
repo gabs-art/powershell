@@ -64,7 +64,7 @@ $GLPI_PASSWORD = "Corolla!@#05042019"
 # Informe o ID da entidade do cliente no GLPI.
 # Consulte a tabela de entidades no final deste script.
 # Exemplo: TrustIT > PM - Capitolio = ID 5
-$GLPI_ENTITY_ID = 11  # TrustIT > CONSORCIO - CISUM
+$GLPI_ENTITY_ID = 23  # TrustIT > CONSORCIO - CISUM
 
 # Lista padrao de servicos (usada quando -Servicos nao e informado)
 $SERVICOS_PADRAO = @(
@@ -529,42 +529,3 @@ if ($sessaoIniciada -and $sessionToken) {
 }
 
 Write-Log "=== Fim da execucao ==="
-
-# ============================================================
-#  TABELA DE ENTIDADES - REFERENCIA PARA INSTALACAO
-# ============================================================
-# Consulte o GLPI em: Administracao > Entidades para obter os IDs atualizados.
-# Preencha $GLPI_ENTITY_ID acima com o ID correspondente ao cliente.
-#
-# ENTIDADES CADASTRADAS (atualizado em 30/03/2026):
-#
-#  ID  | ENTIDADE
-# -----|------------------------------------------
-#  0   | TrustIT (raiz - nao usar para clientes)
-#  10  | TrustIT > PM - Pompeu
-#  11  | TrustIT > PM - Tocantins
-#  12  | TrustIT > PM - Guarapari
-#  13  | TrustIT > PM - Barroso
-#  15  | TrustIT > PM - Lagoa Dourada
-#  16  | TrustIT > CONSORCIO - CIESP
-#  19  | TrustIT > PM - Sao Joao Nepomuceno
-#  20  | TrustIT > PM - Alegre
-#  23  | TrustIT > CONSORCIO - CISUM
-#  24  | TrustIT > PM - Lambari
-#  25  | TrustIT > PM - Cajuri
-#  26  | TrustIT > PM - Sao Sebastiao da Bela Vista
-#  28  | TrustIT > PM - Borda da Mata
-#  29  | TrustIT > PM - Leopoldina
-#
-# Para descobrir os IDs rode no PowerShell do servidor:
-#
-#  $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("script.integration:Corolla!@#05042019"))
-#  $session = (& curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/initSession" `
-#      -H "Authorization: Basic $basicAuth" `
-#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
-#      -H "Content-Type: application/json" | ConvertFrom-Json).session_token
-#  & curl.exe -s -k -X GET "https://suporte.confiancaetecnologia.com.br/apirest.php/Entity?range=0-50" `
-#      -H "App-Token: DsGaJAyh8U9GnUdiMSKVH9s42GZeiiHk5GmIBz4y" `
-#      -H "Session-Token: $session" `
-#      -H "Content-Type: application/json" | ConvertFrom-Json | Select-Object id, completename | Format-Table -AutoSize
-# ============================================================
